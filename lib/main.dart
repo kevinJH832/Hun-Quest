@@ -1,4 +1,14 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
+
+import 'timer/timer_state.dart'; // 상태 관리
+import 'timer/timer_ui.dart'; // UI 위젯
+
+import 'todo/todo_state.dart';
+import 'todo/todo_ui.dart';
+import 'models/todo_item.dart';
 
 void main() {
   runApp(const MyApp());
@@ -7,46 +17,20 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Jahun Quest',
+      title: 'Jaehun Quest',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const MyHomePage(title: 'Jaehun Quest'),
     );
   }
 }
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
   final String title;
 
   @override
@@ -54,157 +38,382 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-  final List<String> _todoList = [];
-  final List<bool> _completedList = [];
+  int _selectedIndex = 0;
+  int _todayTimerCount = 0;
+  int _todayFocusMinutes = 0;
+  String _lastResetDate = '';
+
+  late TimerState _timerState;
+  late TodoState _todoState;
+
+  void _checkDailyReset() {
+    String today = DateTime.now().toString().substring(0, 10);
+    if (_lastResetDate != today) {
+      _todayTimerCount = 0;
+      _todayFocusMinutes = 0;
+      _lastResetDate = today;
+      _saveTimerStats();
+    }
+  }
+
+  void _onTimerComplete(int minutes) {
+    setState(() {
+      _todayTimerCount++;
+      _todayFocusMinutes += minutes;
+    });
+    _saveTimerStats();
+  }
+
+  void _onItemTapped(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+  }
+
+  Widget _buildTodayTab() {
+    return ListenableBuilder(
+      listenable: _todoState,
+      builder: (context, child) {
+        return TodoWidget(todoState: _todoState);
+      },
+    );
+  }
+
+  Widget _buildCalendarTab() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.calendar_month, size: 100, color: Colors.blue),
+          SizedBox(height: 20),
+          Text('캘린더', style: TextStyle(fontSize: 24)),
+          Text('(개발 예정)', style: TextStyle(fontSize: 16, color: Colors.grey)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimerTab() {
+    return ListenableBuilder(
+      listenable: _timerState, // TimerState의 변화를 감지!
+      builder: (context, child) {
+        return TimerWidget(timerState: _timerState);
+      },
+    );
+  }
+
+  Widget _buildStatsTab() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.analytics, size: 100, color: Colors.green),
+          SizedBox(height: 20),
+          Text('통계', style: TextStyle(fontSize: 24)),
+          Text('(개발 예정)', style: TextStyle(fontSize: 16, color: Colors.grey)),
+          SizedBox(height: 20),
+          // 간단한 통계 표시
+          Container(
+            padding: EdgeInsets.all(20),
+            margin: EdgeInsets.symmetric(horizontal: 40),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              color: Colors.green.withOpacity(0.1),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  '오늘의 성과',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                SizedBox(height: 10),
+                Text('완료한 세션: $_todayTimerCount개'),
+                Text('총 집중 시간: $_todayFocusMinutes분'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   void _addTodo() {
     TextEditingController controller = TextEditingController();
+    TodoType selectedType = TodoType.normal; // 기본값
+    List<int> selectedHabitDays = []; // 습관용 요일들
+
     showDialog(
       context: context,
       builder: (context) {
-        String newTodo = '';
-        return AlertDialog(
-          title: Text('새로운 할 일 추가'),
-          content: TextField(
-            controller: controller,
-            decoration: InputDecoration(hintText: '할 일을 입력하세요'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text('취소'),
-            ),
-            TextButton(
-              onPressed: () {
-                if (controller.text.isNotEmpty) {
-                  setState(() {
-                    _todoList.add(controller.text);
-                    _completedList.add(false);
-                  });
-                  Navigator.pop(context);
-                }
-              },
-              child: Text('추가'),
-            ),
-          ],
+        return StatefulBuilder(
+          // 다이얼로그 안에서 상태 변경을 위해 필요!
+          builder: (context, setState) {
+            return AlertDialog(
+              title: Text('새로운 할 일 추가'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 할일 제목 입력
+                  TextField(
+                    controller: controller,
+                    decoration: InputDecoration(hintText: '할 일을 입력하세요'),
+                  ),
+
+                  SizedBox(height: 20),
+
+                  // 타입 선택
+                  Text('타입 선택:', style: TextStyle(fontWeight: FontWeight.bold)),
+                  SizedBox(height: 10),
+
+                  // 타입 선택 버튼들
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _buildTypeButton(
+                        '🔥',
+                        '중요',
+                        TodoType.important,
+                        selectedType,
+                        (type) {
+                          setState(() => selectedType = type);
+                        },
+                      ),
+                      _buildTypeButton(
+                        '📝',
+                        '일반',
+                        TodoType.normal,
+                        selectedType,
+                        (type) {
+                          setState(() => selectedType = type);
+                        },
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _buildTypeButton(
+                        '📅',
+                        '스케줄',
+                        TodoType.schedule,
+                        selectedType,
+                        (type) {
+                          setState(() => selectedType = type);
+                        },
+                      ),
+                      _buildTypeButton(
+                        '🔄',
+                        '습관',
+                        TodoType.habit,
+                        selectedType,
+                        (type) {
+                          setState(() => selectedType = type);
+                        },
+                      ),
+                    ],
+                  ),
+
+                  // 습관 타입일 때만 요일 선택 표시
+                  if (selectedType == TodoType.habit) ...[
+                    SizedBox(height: 20),
+                    Text(
+                      '요일 선택:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    SizedBox(height: 10),
+                    _buildWeekdaySelector(selectedHabitDays, setState),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text('취소'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    if (controller.text.isNotEmpty) {
+                      // 습관 타입이면서 요일이 선택되지 않았으면 에러
+                      if (selectedType == TodoType.habit &&
+                          selectedHabitDays.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('습관은 최소 1개 요일을 선택해주세요!')),
+                        );
+                        return;
+                      }
+
+                      _todoState.addTodo(
+                        controller.text,
+                        selectedType,
+                        habitDays: selectedType == TodoType.habit
+                            ? selectedHabitDays
+                            : null,
+                      );
+                      Navigator.pop(context);
+                    }
+                  },
+                  child: Text('추가'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
   }
 
-  void _toggleTodo(int index) {
-    setState(() {
-      _completedList[index] = !_completedList[index];
-      if (_completedList[index]) {
-        _counter++;
-      } else {
-        _counter--;
-      }
-    });
+  Future<void> _saveTimerStats() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('todayTimerCount', _todayTimerCount);
+    await prefs.setInt('todayFocusMinutes', _todayFocusMinutes);
+    await prefs.setString('lastResetDate', _lastResetDate);
+  }
+
+  Future<void> _loadTimerStats() async {
+    final prefs = await SharedPreferences.getInstance();
+    _todayTimerCount = prefs.getInt('todayTimerCount') ?? 0;
+    _todayFocusMinutes = prefs.getInt('todayFocusMinutes') ?? 0;
+    _lastResetDate = prefs.getString('lastResetDate') ?? '';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+
+    _timerState = TimerState(onTimerComplete: _onTimerComplete);
+    _todoState = TodoState();
+
+    _loadTimerStats();
+    _checkDailyReset();
+  }
+
+  // 메모리 정리
+  @override
+  void dispose() {
+    _timerState.dispose();
+    _todoState.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    Widget currentTab;
+    switch (_selectedIndex) {
+      case 0:
+        currentTab = _buildTodayTab();
+        break;
+      case 1:
+        currentTab = _buildCalendarTab();
+        break;
+      case 2:
+        currentTab = _buildTimerTab();
+        break;
+      case 3:
+        currentTab = _buildStatsTab();
+        break;
+      default:
+        currentTab = _buildTodayTab();
+    }
+
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
         title: Text(widget.title),
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
+      body: currentTab,
+      bottomNavigationBar: BottomNavigationBar(
+        type: BottomNavigationBarType.fixed,
+        currentIndex: _selectedIndex,
+        onTap: _onItemTapped,
+        items: [
+          BottomNavigationBarItem(icon: Icon(Icons.today), label: '오늘'),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.calendar_month),
+            label: '캘린더',
+          ),
+          BottomNavigationBarItem(icon: Icon(Icons.timer), label: '타이머'),
+          BottomNavigationBarItem(icon: Icon(Icons.analytics), label: '통계'),
+        ],
+      ),
+      floatingActionButton: _selectedIndex == 0
+          ? FloatingActionButton(
+              onPressed: _addTodo,
+              tooltip: '할 일 추가',
+              child: const Icon(Icons.add),
+            )
+          : null,
+    );
+  }
+
+  Widget _buildTypeButton(
+    String icon,
+    String label,
+    TodoType type,
+    TodoType selectedType,
+    Function(TodoType) onTap,
+  ) {
+    bool isSelected = selectedType == type;
+    return GestureDetector(
+      onTap: () => onTap(type),
+      child: Container(
+        padding: EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: isSelected ? Colors.deepPurple : Colors.grey,
+            width: isSelected ? 2 : 1,
+          ),
+          borderRadius: BorderRadius.circular(8),
+          color: isSelected ? Colors.deepPurple.withOpacity(0.1) : null,
+        ),
         child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('현재 포인트: '),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            SizedBox(height: 30),
-            Text(
-              "할 일 목록",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            Expanded(
-              child: _todoList.isEmpty
-                  ? Center(child: Text("아직 할 일이 없어요!\n+ 버튼을 눌러 추가하세요"))
-                  : ListView.builder(
-                      itemCount: _todoList.length,
-                      itemBuilder: (context, index) {
-                        return Dismissible(
-                          key: Key(_todoList[index]),
-                          direction: DismissDirection.endToStart,
-                          background: Container(
-                            color: Colors.red,
-                            alignment: Alignment.centerRight,
-                            padding: EdgeInsets.only(right: 20),
-                            child: Icon(Icons.delete, color: Colors.white),
-                          ),
-                          onDismissed: (direction) {
-                            setState(() {
-                              _todoList.removeAt(index);
-                              _completedList.removeAt(index);
-                            });
-                          },
-                          child: ListTile(
-                            title: Text(
-                              _todoList[index],
-                              style: TextStyle(
-                                decoration: _completedList[index]
-                                    ? TextDecoration.lineThrough
-                                    : TextDecoration.none,
-                                color: _completedList[index]
-                                    ? Colors.grey
-                                    : Colors.black,
-                              ),
-                            ),
-                            leading: IconButton(
-                              icon: Icon(
-                                _completedList[index]
-                                    ? Icons.check_circle
-                                    : Icons.radio_button_unchecked,
-                              ),
-                              onPressed: () => _toggleTodo(index),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-            ),
+          children: [
+            Text(icon, style: TextStyle(fontSize: 20)),
+            Text(label, style: TextStyle(fontSize: 12)),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _addTodo,
-        tooltip: '할 일 추가',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+    );
+  }
+
+  Widget _buildWeekdaySelector(List<int> selectedDays, Function setState) {
+    List<String> weekdays = ['월', '화', '수', '목', '금', '토', '일'];
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: List.generate(7, (index) {
+        int dayNumber = index + 1;
+        bool isSelected = selectedDays.contains(dayNumber);
+
+        return GestureDetector(
+          onTap: () {
+            setState(() {
+              if (isSelected) {
+                selectedDays.remove(dayNumber);
+              } else {
+                selectedDays.add(dayNumber);
+              }
+            });
+          },
+          child: Container(
+            width: 35,
+            height: 35,
+            decoration: BoxDecoration(
+              color: isSelected ? Colors.deepPurple : Colors.grey[200],
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Center(
+              child: Text(
+                weekdays[index],
+                style: TextStyle(
+                  color: isSelected ? Colors.white : Colors.black,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        );
+      }),
     );
   }
 }
